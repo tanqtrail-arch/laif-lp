@@ -10,18 +10,26 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
-  // Serve static files from dist/public in production
-  const staticPath =
-    process.env.NODE_ENV === "production"
-      ? path.resolve(__dirname, "public")
-      : path.resolve(__dirname, "..", "dist", "public");
+  app.use(express.json());
 
-  app.use(express.static(staticPath));
+  // --- API Routes ---
+  const apiRouter = express.Router();
 
-  // Handle client-side routing - serve index.html for all routes
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(staticPath, "index.html"));
+  apiRouter.get("/health", (_req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
+
+  app.use("/api/v1", apiRouter);
+
+  // --- Static files (production only) ---
+  if (process.env.NODE_ENV === "production") {
+    const staticPath = path.resolve(__dirname, "public");
+    app.use(express.static(staticPath));
+
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(staticPath, "index.html"));
+    });
+  }
 
   const port = process.env.PORT || 3000;
 
