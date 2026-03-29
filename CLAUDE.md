@@ -1,598 +1,178 @@
-# CLAUDE.md - LaiF 開発ガイド
+# Painting Quiz v2 - 設計書
 
-## 1. プロジェクト概要
+## プロジェクト概要
+世界の名画クイズアプリ（GitHub Pages）のバージョンアップ。
+小学5年〜中学生が直感的に使える美術館風クイズ＆図鑑アプリ。
 
-### サービス名
-**LaiF（ライフ）** — AIで、愛のある時間を取り戻す
+## ターゲット
+- 小学5〜6年生、中学生
+- ふりがな不要、漢字OK
+- 直感的・ビジュアル重視のUI
 
-### ミッション
-LINE対応・営業・予約導線をAIで自動化し「時間」と「売上」を同時に生み出す。
-**LaiFはツールではない。売上導線を自動化する仕組み。**
+## 技術スタック
+- HTML/CSS/JavaScript（バニラ、フレームワーク不使用）
+- GitHub Pages でホスティング
+- Wikimedia Commons API で画像取得
+- LocalStorage でデータ永続化
 
-### ターゲット
-- 個人事業主の女性（特にママ）
-- 教室・美容・カウンセラー・コーチ
-- LINEで顧客対応している人
-
-### 全体導線
+## ファイル構成
 ```
-LP → AIチャット相談（LINE） → 予約ページ（外部リンク） → マイページ（顧客カルテ） → リピート・紹介
-```
-
-### 開発優先順位
-1. AIチャット（LINE上のAI接客・営業）
-2. 予約導線（予約カレンダーURL送信）
-3. 顧客AIカルテ（会話→構造化→蓄積）
-4. 経営ダッシュボード（売上・予約・顧客分析）
-
----
-
-## 2. 技術スタック
-
-### モノレポ構成
-```
-laif-lp/
-├── client/          # フロントエンド
-├── server/          # バックエンドAPI
-├── shared/          # 共有型定義・ユーティリティ
-├── patches/         # パッチファイル
-├── supabase/        # DB マイグレーション・シード
-├── CLAUDE.md        # このファイル
-└── package.json     # ワークスペースルート
+Painting-quiz2/
+├── index.html              # メインHTML（SPA）
+├── css/
+│   └── style.css           # メインスタイル（CSS変数で配色管理）
+├── js/
+│   ├── app.js              # アプリ初期化・ルーティング・画面切り替え
+│   ├── quiz.js             # クイズロジック
+│   ├── collection.js       # コレクション（図鑑）ロジック
+│   └── data-loader.js      # paintings.json読み込み・画像プリロード
+├── data/
+│   └── paintings.json      # 100作品のデータ
+├── scripts/
+│   ├── fetch-paintings.js  # Wikimedia API画像取得スクリプト（Node.js）
+│   └── validate-images.js  # 画像URL検証スクリプト
+├── assets/
+│   └── icons/              # UIアイコン（SVG）
+├── docs/
+│   └── design-spec.md      # デザイン仕様
+└── CLAUDE.md               # この設計書
 ```
 
-### フロントエンド（client/）
-| 項目 | 技術 |
-|------|------|
-| フレームワーク | React 18 + TypeScript |
-| ビルドツール | Vite |
-| ルーティング | React Router v6 |
-| 状態管理 | Zustand（グローバル）+ React Query（サーバー状態） |
-| UIライブラリ | Tailwind CSS + shadcn/ui |
-| フォーム | React Hook Form + Zod |
-| アイコン | Lucide React |
+## デザイン仕様
 
-### バックエンド（server/）
-| 項目 | 技術 |
-|------|------|
-| ランタイム | Node.js 20+ |
-| フレームワーク | Express + TypeScript |
-| ORM | Supabase JS Client（直接クエリ） |
-| 認証 | Supabase Auth（オーナーログイン） |
-| AI | Anthropic Claude API（claude-sonnet-4-20250514） |
-| LINE | LINE Messaging API（Webhook） |
-| バリデーション | Zod |
-
-### インフラ・DB
-| 項目 | 技術 |
-|------|------|
-| データベース | Supabase（PostgreSQL） |
-| ストレージ | Supabase Storage |
-| ホスティング | Vercel（client）+ Railway or Render（server） |
-| 環境変数管理 | .env（gitignore済み） |
-
-### 共有（shared/）
-```
-shared/
-├── types/           # 共有型定義
-│   ├── customer.ts
-│   ├── chat.ts
-│   ├── booking.ts
-│   └── owner.ts
-├── constants/       # 定数
-│   ├── interest-levels.ts
-│   └── chat-actions.ts
-└── validators/      # Zodスキーマ（共有バリデーション）
-    ├── customer.ts
-    └── booking.ts
-```
-
----
-
-## 3. DB設計（Supabase / PostgreSQL）
-
-### ER概要
-```
-owners ─┬─< customers ──< chat_messages
-        │       │
-        │       ├──< customer_needs
-        │       │
-        │       ├──< bookings
-        │       │
-        │       └──< action_logs
-        │
-        └─< ai_configs
-```
-
-### テーブル定義
-
-#### `owners`（オーナー = サービス利用者）
-```sql
-CREATE TABLE owners (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  auth_id UUID UNIQUE REFERENCES auth.users(id),
-  name TEXT NOT NULL,
-  email TEXT NOT NULL,
-  business_name TEXT,
-  business_type TEXT,  -- 'salon' | 'school' | 'coach' | 'counselor' | 'other'
-  line_channel_id TEXT,
-  line_channel_secret TEXT,
-  line_access_token TEXT,
-  booking_url TEXT,     -- Calendly等の予約URL
-  booking_system TEXT,  -- 'google_calendar' | 'calendly' | 'other'
-  plan TEXT DEFAULT 'light',  -- 'light' | 'standard' | 'premium'
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-```
-
-#### `customers`（エンド顧客 = LINEユーザー）
-```sql
-CREATE TABLE customers (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id UUID NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-  line_user_id TEXT NOT NULL,
-  display_name TEXT,
-  name TEXT,
-  avatar_url TEXT,
-  interest_level TEXT DEFAULT 'unknown',
-    -- 'hot'（🔥今すぐ検討）| 'warm'（🙂興味あり）| 'cold'（😴様子見）| 'unknown'
-  tags TEXT[] DEFAULT '{}',
-  memo TEXT,
-  first_contact_at TIMESTAMPTZ DEFAULT now(),
-  last_contact_at TIMESTAMPTZ DEFAULT now(),
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(owner_id, line_user_id)
-);
-
-CREATE INDEX idx_customers_owner ON customers(owner_id);
-CREATE INDEX idx_customers_interest ON customers(owner_id, interest_level);
-```
-
-#### `customer_needs`（AIカルテ：ヒアリング結果）
-```sql
-CREATE TABLE customer_needs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  category TEXT NOT NULL,  -- 'problem' | 'need' | 'goal' | 'situation'
-  content TEXT NOT NULL,
-  confidence REAL DEFAULT 0.8,  -- AIの確信度 0.0〜1.0
-  source_message_id UUID,       -- 根拠となったメッセージ
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX idx_needs_customer ON customer_needs(customer_id);
-```
-
-#### `chat_messages`（会話ログ）
-```sql
-CREATE TABLE chat_messages (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  owner_id UUID NOT NULL REFERENCES owners(id),
-  role TEXT NOT NULL,  -- 'user' | 'assistant' | 'system'
-  content TEXT NOT NULL,
-  message_type TEXT DEFAULT 'text',  -- 'text' | 'image' | 'sticker' | 'action'
-  line_message_id TEXT,
-  ai_action TEXT,  -- 'greeting' | 'hearing' | 'proposal' | 'closing' | 'booking_link'
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX idx_messages_customer ON chat_messages(customer_id, created_at);
-CREATE INDEX idx_messages_owner ON chat_messages(owner_id, created_at DESC);
-```
-
-#### `bookings`（予約）
-```sql
-CREATE TABLE bookings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  owner_id UUID NOT NULL REFERENCES owners(id),
-  status TEXT DEFAULT 'pending',
-    -- 'pending' | 'confirmed' | 'completed' | 'cancelled' | 'no_show'
-  booking_url TEXT,
-  scheduled_at TIMESTAMPTZ,
-  menu TEXT,
-  price INTEGER,  -- 円単位
-  notes TEXT,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX idx_bookings_owner ON bookings(owner_id, status);
-CREATE INDEX idx_bookings_customer ON bookings(customer_id);
-```
-
-#### `action_logs`（行動履歴）
-```sql
-CREATE TABLE action_logs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  owner_id UUID NOT NULL REFERENCES owners(id),
-  action_type TEXT NOT NULL,
-    -- 'link_click' | 'booking_page_visit' | 'booking_complete'
-    -- | 'message_read' | 'follow' | 'unfollow' | 'ai_proposal'
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX idx_actions_customer ON action_logs(customer_id, created_at DESC);
-```
-
-#### `ai_configs`（AIチャット設定）
-```sql
-CREATE TABLE ai_configs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id UUID NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-  system_prompt TEXT NOT NULL,
-  greeting_message TEXT,
-  business_description TEXT,
-  menu_items JSONB DEFAULT '[]',
-    -- [{ name, description, price, duration }]
-  tone TEXT DEFAULT 'friendly',  -- 'friendly' | 'professional' | 'casual'
-  closing_style TEXT DEFAULT 'soft',  -- 'soft' | 'direct'
-  auto_booking_link BOOLEAN DEFAULT true,
-  follow_up_hours INTEGER DEFAULT 24,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(owner_id)
-);
-```
-
-### Row Level Security (RLS)
-```sql
--- すべてのテーブルにRLSを有効化
-ALTER TABLE owners ENABLE ROW LEVEL SECURITY;
-ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE bookings ENABLE ROW LEVEL SECURITY;
--- ...
-
--- オーナーは自分のデータのみアクセス可能
-CREATE POLICY "owners_own_data" ON customers
-  FOR ALL USING (owner_id = auth.uid());
-
-CREATE POLICY "owners_own_messages" ON chat_messages
-  FOR ALL USING (owner_id = auth.uid());
-```
-
----
-
-## 4. API設計
-
-### ベースURL
-```
-/api/v1
-```
-
-### 認証
-- オーナー向けAPI: Supabase Auth JWT（Bearerトークン）
-- LINE Webhook: LINE署名検証（x-line-signature）
-
-### エンドポイント一覧
-
-#### LINE Webhook
-| メソッド | パス | 説明 |
-|---------|------|------|
-| POST | `/api/v1/webhook/line` | LINEイベント受信（メッセージ・フォロー等） |
-
-#### 顧客（Customers）
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/v1/customers` | 顧客一覧（検索・フィルタ対応） |
-| GET | `/api/v1/customers/:id` | 顧客詳細（カルテ含む） |
-| PATCH | `/api/v1/customers/:id` | 顧客情報更新（タグ・メモ等） |
-| GET | `/api/v1/customers/:id/messages` | 会話ログ取得 |
-| GET | `/api/v1/customers/:id/needs` | ヒアリング結果取得 |
-
-#### 予約（Bookings）
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/v1/bookings` | 予約一覧 |
-| PATCH | `/api/v1/bookings/:id` | 予約ステータス更新 |
-
-#### ダッシュボード（Dashboard）
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/v1/dashboard/summary` | サマリー（売上合計・予約数・成約率） |
-| GET | `/api/v1/dashboard/revenue` | 売上推移 |
-| GET | `/api/v1/dashboard/interest` | 興味レベル分布 |
-
-#### AI設定（AI Config）
-| メソッド | パス | 説明 |
-|---------|------|------|
-| GET | `/api/v1/ai-config` | AI設定取得 |
-| PUT | `/api/v1/ai-config` | AI設定更新 |
-
-#### 認証（Auth）
-| メソッド | パス | 説明 |
-|---------|------|------|
-| POST | `/api/v1/auth/signup` | オーナー新規登録 |
-| POST | `/api/v1/auth/login` | ログイン |
-| GET | `/api/v1/auth/me` | 自分の情報取得 |
-
-### LINE Webhook処理フロー
-```
-LINE Event受信
-  ↓
-署名検証（x-line-signature）
-  ↓
-イベント種別で分岐
-  ├── follow → 顧客作成 + 挨拶メッセージ送信
-  ├── message（text）→ AI応答生成 + 返信 + カルテ更新
-  ├── message（other）→ テキスト変換 or 定型返信
-  └── unfollow → action_log記録
-```
-
-### AI応答生成フロー
-```
-ユーザーメッセージ受信
-  ↓
-会話履歴取得（直近20件）
-  ↓
-顧客カルテ取得（needs）
-  ↓
-AI設定取得（system_prompt, menu_items等）
-  ↓
-Claude API呼び出し
-  ↓
-応答解析
-  ├── テキスト返信 → LINE reply
-  ├── ニーズ抽出 → customer_needs INSERT
-  ├── 興味レベル判定 → customers UPDATE
-  └── 予約誘導 → booking_url付きメッセージ
-  ↓
-chat_messages INSERT（user + assistant）
-```
-
----
-
-## 5. ディレクトリ構成（目標）
-
-### client/
-```
-client/
-├── public/
-├── src/
-│   ├── components/
-│   │   ├── ui/           # shadcn/ui ベースコンポーネント
-│   │   ├── layout/       # Header, Sidebar, Layout
-│   │   ├── customer/     # CustomerCard, CustomerList, Karte
-│   │   ├── chat/         # ChatLog, MessageBubble
-│   │   ├── booking/      # BookingList, BookingStatus
-│   │   └── dashboard/    # StatCard, RevenueChart, InterestPie
-│   ├── pages/
-│   │   ├── Home.tsx       # LP（ランディングページ）
-│   │   ├── Login.tsx
-│   │   ├── Dashboard.tsx
-│   │   ├── Customers.tsx
-│   │   ├── CustomerDetail.tsx  # カルテ詳細
-│   │   ├── Bookings.tsx
-│   │   ├── AiConfig.tsx
-│   │   └── NotFound.tsx
-│   ├── hooks/            # カスタムフック
-│   ├── lib/              # API client, utils
-│   ├── stores/           # Zustand stores
-│   ├── styles/           # グローバルCSS
-│   ├── App.tsx
-│   └── main.tsx
-├── index.html
-├── tailwind.config.ts
-├── tsconfig.json
-├── vite.config.ts
-└── package.json
-```
-
-### server/
-```
-server/
-├── src/
-│   ├── routes/
-│   │   ├── webhook.ts     # LINE Webhook
-│   │   ├── customers.ts
-│   │   ├── bookings.ts
-│   │   ├── dashboard.ts
-│   │   ├── ai-config.ts
-│   │   └── auth.ts
-│   ├── services/
-│   │   ├── ai.ts          # Claude API連携
-│   │   ├── line.ts        # LINE Messaging API
-│   │   ├── karte.ts       # カルテ自動生成
-│   │   └── analytics.ts   # ダッシュボード集計
-│   ├── middleware/
-│   │   ├── auth.ts        # Supabase JWT検証
-│   │   └── line-verify.ts # LINE署名検証
-│   ├── lib/
-│   │   ├── supabase.ts    # Supabase client
-│   │   └── claude.ts      # Anthropic client
-│   ├── types/
-│   └── index.ts           # Expressエントリーポイント
-├── tsconfig.json
-└── package.json
-```
-
----
-
-## 6. デザインルール
-
-### ブランドトーン
-**やさしいテック** — テクノロジーだけど、あたたかい。
-
-### カラーパレット
+### 配色（CSS変数）
 ```css
 :root {
-  /* プライマリ */
-  --mint:       #7ECEC1;
-  --mint-light: #B5E4DC;
-  --mint-pale:  #E4F5F1;
-
-  /* セカンダリ */
-  --pink:       #D4A0A0;
-  --pink-light: #EACECE;
-  --pink-pale:  #F7ECEC;
-
-  /* ニュートラル */
-  --beige:      #F5EDE3;
-  --beige-dark: #E8DDD0;
-  --white:      #FEFDFB;
-
-  /* テキスト */
-  --text:       #4A4543;
-  --text-soft:  #6B6563;
-  --text-light: #8A8280;
-}
-```
-
-### Tailwindカスタムカラー（tailwind.config.ts）
-```ts
-colors: {
-  mint: { DEFAULT: '#7ECEC1', light: '#B5E4DC', pale: '#E4F5F1' },
-  rose: { DEFAULT: '#D4A0A0', light: '#EACECE', pale: '#F7ECEC' },
-  sand: { DEFAULT: '#F5EDE3', dark: '#E8DDD0' },
-  ink:  { DEFAULT: '#4A4543', soft: '#6B6563', light: '#8A8280' },
+  --bg-primary: #1a1a2e;        /* 深いネイビー（美術館の壁） */
+  --bg-secondary: #16213e;      /* やや明るいネイビー */
+  --bg-card: #ffffff;           /* カード背景 */
+  --accent-gold: #e8b830;       /* ゴールド（アクセント） */
+  --accent-gold-light: #f5d76e; /* ゴールド薄め */
+  --text-primary: #2c3e50;      /* メインテキスト */
+  --text-light: #f0f0f0;        /* 暗い背景上のテキスト */
+  --success: #27ae60;           /* 正解グリーン */
+  --error: #e74c3c;             /* 不正解レッド */
+  --border-radius: 16px;        /* カード角丸 */
+  --shadow: 0 4px 20px rgba(0,0,0,0.15);
 }
 ```
 
 ### UIルール
-- **角丸**: `rounded-2xl`（カード）/ `rounded-full`（ボタン・バッジ）
-- **余白**: 多め。セクション間 `py-24`、カード内 `p-6` 以上
-- **影**: `shadow-sm` or `shadow-md`。柔らかいドロップシャドウのみ
-- **フォント**: 見出し `Zen Maru Gothic`、本文 `Noto Sans JP`
-- **背景**: パステルグラデーション or ホワイト。黒ベース禁止
+- ボタン: min-height 52px、角丸12px、タップで軽く沈むアニメーション（0.95 scale）
+- カード: 白背景、角丸16px、やわらかいシャドウ
+- フォント: 本文16-18px、見出し20-24px
+- 画面下部タブバー: 🎨クイズ / 📖コレクション / ⚙️設定
+  - アイコン＋短いラベル、選択中はゴールドにハイライト
+- 正解フィードバック: ボタンが緑 + 画面にうっすら緑のフラッシュ + ✨パーティクル(CSS)
+- 不正解フィードバック: ボタンが赤 + 軽いシェイク + 正解ボタンが光る（「おしい！」の雰囲気）
+- 画面遷移: フェード（0.3s ease）
+- スマホファースト、タブレットでも崩れない
 
-### NG（絶対に使わない）
-- ❌ 黒ベース背景
-- ❌ ネオン・ビビッドカラー
-- ❌ 硬いUI（角張ったボーダー、細い線）
-- ❌ 攻撃的・押し売り的なコピー
+### 画面ID（HTML）
+- `#screen-home` - クイズ開始画面（ジャンル・難易度選択）
+- `#screen-quiz` - クイズ出題画面
+- `#screen-result` - クイズ結果画面
+- `#screen-collection` - コレクション（図鑑）画面
+- `#screen-detail-modal` - 作品詳細モーダル
+- `#screen-settings` - 設定画面
+- `#tab-bar` - 画面下部固定タブバー
 
-### コピーガイドライン
-| ❌ やらない | ⭕ やる |
-|------------|--------|
-| 効率化 | 少し楽になる |
-| 爆速 | そっと |
-| 自動化ツール | あなたの代わりに |
-| 業界最安 | 安心して始められる |
+### クイズ開始画面
+- ジャンル選択: チップ型（横スクロール、タップでON/OFF、選択中は色変化）
+- 難易度: ★★★の3段階カード型
+- スタートボタン: 大きなゴールドボタン、中央配置
 
----
+### クイズ画面レイアウト
+- 上部60%: 絵画を大きく表示（アスペクト比保持、暗い背景）
+- 下部40%: 選択肢カード（白背景、角丸、シャドウ）
+- 問題数・正解数の進捗バー（細いゴールドのライン）
 
-## 7. コーディング規約
+### コレクション画面
+- 2列グリッド（サムネイル＋作品名）
+- 未取得: モノクロ＋鍵アイコンオーバーレイ
+- 取得済み: カラー表示
+- タップで詳細モーダル
+- 上部にジャンルフィルターチップ（横スクロール）
+- 進捗バー「32/100作品」
 
-### 共通
-- 言語: TypeScript strict mode
-- パッケージマネージャ: npm workspaces
-- リンター: ESLint + Prettier
-- インポート順: 外部 → 共有 → 内部 → 型
-- 命名: camelCase（変数・関数）、PascalCase（コンポーネント・型）
-- ファイル名: kebab-case（`customer-card.tsx`）、PascalCase（`CustomerCard.tsx`、コンポーネントのみ）
+### 結果画面
+- 大きなスコア表示
+- メダル: 90%以上🏆 / 70%以上🥈 / 50%以上🥉
+- 正解作品のサムネグリッド
+- 紙吹雪CSS（90%以上の時）
 
-### React規約
-```tsx
-// ✅ 関数コンポーネント + named export
-export function CustomerCard({ customer }: CustomerCardProps) {
-  // ...
+### 詳細モーダル
+- 作品画像（大）
+- 作品名 / 作者 / 制作年 / 所蔵美術館
+- trivia（豆知識）を吹き出し風デザインで表示
+- 「もっと知りたい → Wikipedia」リンク
+
+## データ形式（paintings.json）
+```json
+{
+  "id": 1,
+  "title_ja": "モナ・リザ",
+  "title_en": "Mona Lisa",
+  "artist_ja": "レオナルド・ダ・ヴィンチ",
+  "artist_en": "Leonardo da Vinci",
+  "year": "1503-1519",
+  "genre": "肖像画",
+  "museum": "ルーヴル美術館",
+  "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Mona_Lisa.jpg/600px-Mona_Lisa.jpg",
+  "image_thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Mona_Lisa.jpg/300px-Mona_Lisa.jpg",
+  "wiki_filename": "Mona_Lisa.jpg",
+  "difficulty": 1,
+  "trivia": "実はこの絵、ナポレオンが自分の寝室にかざっていたことがある。描かれた女性が誰なのか、500年たった今でもナゾが残っている。"
 }
-
-// ✅ Props型は同ファイル内で定義
-type CustomerCardProps = {
-  customer: Customer;
-  onSelect?: (id: string) => void;
-};
 ```
 
-### API規約
-```ts
-// ✅ レスポンス統一フォーマット
-type ApiResponse<T> = {
-  success: true;
-  data: T;
-} | {
-  success: false;
-  error: { code: string; message: string };
-};
-```
+## triviaの書き方ルール
+- 小5〜6年生が読んで「へぇ！」「すごい！」と思う内容
+- 1エントリ2〜3文、80文字前後
+- 難しい専門用語は使わない（「遠近法」→OK、「スフマート技法」→NG）
+- 「実は〜」「じつは〜」「知ってた？」のように興味を引く書き出し
+- 作品の裏話、意外なエピソード、数字で驚くネタを優先
 
-### コミットメッセージ
-```
-feat: 顧客カルテ一覧ページ追加
-fix: LINE Webhook署名検証エラー修正
-refactor: AI応答生成ロジック分離
-style: ダッシュボードカードのレイアウト調整
-docs: CLAUDE.md更新
-```
+## genre一覧
+肖像画 / 風景画 / 宗教画 / 歴史画 / 静物画 / 風俗画 / 浮世絵 / 抽象画 / 神話画
 
----
+## difficulty
+- 1: 有名（モナ・リザ等）→ かんたんモードで出題、選択肢3つ
+- 2: やや通向け → ふつうモードで出題、選択肢4つ
+- 3: 通向け → むずかしいモードで出題、選択肢4つ
 
-## 8. 環境変数
+## クイズモード
+1. 作品名当て: 絵を見て作品名を選ぶ
+2. 作者当て: 絵を見て作者を選ぶ
+3. ジャンル当て: 絵を見てジャンルを選ぶ
 
-### `.env`（サーバー）
-```env
-# Supabase
-SUPABASE_URL=https://xxxxx.supabase.co
-SUPABASE_ANON_KEY=eyJhbGci...
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGci...
+## 選択肢生成ルール
+- 正解1つ + ダミー2〜3つ
+- ダミーは同ジャンル or 同時代の作品から優先選出（紛らわしくする）
+- 同じ選択肢が重複しないこと
 
-# Anthropic
-ANTHROPIC_API_KEY=sk-ant-...
+## コレクション（図鑑）ルール
+- 1つの作品で3モード（作品名・作者・ジャンル）全正解 → コレクション追加
+- コレクション済み作品は図鑑でカラー表示
+- 未取得作品はモノクロ＋鍵アイコン
 
-# LINE Messaging API
-LINE_CHANNEL_SECRET=xxxxx
-LINE_CHANNEL_ACCESS_TOKEN=xxxxx
+## 既存機能（維持すること）
+- ALTコイン連携（TRAILポータル）
+- TrailSDK連携（存在する場合）
+- LocalStorageのコレクションデータ（形式変更時はマイグレーション処理）
 
-# Server
-PORT=3000
-NODE_ENV=development
-```
+## 連続正解演出
+- 3連続: 「3連続正解！🔥」
+- 5連続: 「5連続！すごい！🔥🔥」
+- 10連続: 「10連続！天才！🔥🔥🔥」
 
----
+## チュートリアル（初回のみ）
+3枚のスライド:
+1. 「クイズに答えよう」
+2. 「コレクションを集めよう」
+3. 「目指せ全作品制覇！」
 
-## 9. 開発フロー
-
-### Phase 1: LP + 基盤（現在）
-- [x] リポジトリ作成
-- [ ] モノレポ設定（npm workspaces）
-- [ ] Vite + React + Tailwind セットアップ
-- [ ] LPページ実装
-- [ ] Supabase プロジェクト作成 + マイグレーション
-
-### Phase 2: AIチャット + LINE連携
-- [ ] LINE Messaging API セットアップ
-- [ ] Webhook エンドポイント実装
-- [ ] Claude API連携（AI応答生成）
-- [ ] 会話ログ保存
-- [ ] 顧客自動作成（follow イベント）
-
-### Phase 3: 予約導線 + カルテ
-- [ ] AI応答から予約リンク自動送信
-- [ ] ニーズ自動抽出（Claude structured output）
-- [ ] 顧客カルテ自動生成・更新
-- [ ] カルテ一覧・詳細ページ
-
-### Phase 4: ダッシュボード
-- [ ] 売上サマリー
-- [ ] 予約管理
-- [ ] 興味レベル分布
-- [ ] 成約率推移
-
----
-
-## 10. 重要な設計思想
-
-### AIチャットは「売るAI」
-```
-❌ ただ返答する → ⭕ 予約したい状態をつくる
-```
-
-### AIの応答フェーズ
-1. **挨拶**（greeting）— やさしく迎える
-2. **ヒアリング**（hearing）— 悩み・ニーズを引き出す
-3. **提案**（proposal）— ぴったりのメニューを提案
-4. **クロージング**（closing）— 予約への自然な誘導
-5. **予約リンク**（booking_link）— カレンダーURL送信
-
-### 最終ビジョン
-```
-忙しい毎日を、少しやさしくするAI
-```
+## 画像サイズ
+- クイズ表示用: 600px幅（image）
+- コレクション一覧用: 300px幅（image_thumb）
+- Wikimedia CommonsのサムネイルURL形式を使用
