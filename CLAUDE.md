@@ -1,178 +1,183 @@
-# Painting Quiz v2 - 設計書
+# CLAUDE.md - LaiF 開発ガイド
 
-## プロジェクト概要
-世界の名画クイズアプリ（GitHub Pages）のバージョンアップ。
-小学5年〜中学生が直感的に使える美術館風クイズ＆図鑑アプリ。
+## 1. プロジェクト概要
 
-## ターゲット
-- 小学5〜6年生、中学生
-- ふりがな不要、漢字OK
-- 直感的・ビジュアル重視のUI
+### サービス名
+**LaiF（ライフ）** — AIで、愛のある時間を取り戻す
 
-## 技術スタック
-- HTML/CSS/JavaScript（バニラ、フレームワーク不使用）
-- GitHub Pages でホスティング
-- Wikimedia Commons API で画像取得
-- LocalStorage でデータ永続化
+### ミッション
+LINE対応・営業・予約導線をAIで自動化し「時間」と「売上」を同時に生み出す。
+**LaiFはツールではない。売上導線を自動化する仕組み。**
 
-## ファイル構成
-```
-Painting-quiz2/
-├── index.html              # メインHTML（SPA）
-├── css/
-│   └── style.css           # メインスタイル（CSS変数で配色管理）
-├── js/
-│   ├── app.js              # アプリ初期化・ルーティング・画面切り替え
-│   ├── quiz.js             # クイズロジック
-│   ├── collection.js       # コレクション（図鑑）ロジック
-│   └── data-loader.js      # paintings.json読み込み・画像プリロード
-├── data/
-│   └── paintings.json      # 100作品のデータ
-├── scripts/
-│   ├── fetch-paintings.js  # Wikimedia API画像取得スクリプト（Node.js）
-│   └── validate-images.js  # 画像URL検証スクリプト
-├── assets/
-│   └── icons/              # UIアイコン（SVG）
-├── docs/
-│   └── design-spec.md      # デザイン仕様
-└── CLAUDE.md               # この設計書
-```
+### コアメッセージ
+あなたは、目の前のお客さまだけに集中してください。
+それ以外は、LaiF が引き受けます。
 
-## デザイン仕様
+### サービス哲学
+オーナーの仕事は本来「認知」と「対面」の2つだけ。
+- 認知活動 — 知ってもらう（SNS・広告・紹介）
+- 対面サービス — 目の前のお客さまに集中する
+- 間のすべて — LINE返信・ヒアリング・提案・予約・カルテ・フォロー → LaiFが自動化
 
-### 配色（CSS変数）
-```css
-:root {
-  --bg-primary: #1a1a2e;        /* 深いネイビー（美術館の壁） */
-  --bg-secondary: #16213e;      /* やや明るいネイビー */
-  --bg-card: #ffffff;           /* カード背景 */
-  --accent-gold: #e8b830;       /* ゴールド（アクセント） */
-  --accent-gold-light: #f5d76e; /* ゴールド薄め */
-  --text-primary: #2c3e50;      /* メインテキスト */
-  --text-light: #f0f0f0;        /* 暗い背景上のテキスト */
-  --success: #27ae60;           /* 正解グリーン */
-  --error: #e74c3c;             /* 不正解レッド */
-  --border-radius: 16px;        /* カード角丸 */
-  --shadow: 0 4px 20px rgba(0,0,0,0.15);
-}
-```
+### ターゲット
+- 個人事業主の女性（特にママ）
+- 教室・美容・カウンセラー・コーチ
+- LINEで顧客対応している人
+
+### 開発優先順位
+1. AIチャット（LINE上のAI接客・営業）
+2. 予約導線（予約カレンダーURL送信）
+3. 顧客AIカルテ（会話→構造化→蓄積）
+4. 経営ダッシュボード（売上・予約・顧客分析）
+
+## 2. 技術スタック
+
+### フロントエンド（client/）
+- React 18 + TypeScript + Vite
+- Tailwind CSS + shadcn/ui
+- React Router v6（またはwouter）
+- Zustand + React Query
+- Lucide React
+
+### バックエンド（server/）
+- Node.js 20+ / Express + TypeScript
+- Supabase JS Client
+- Anthropic Claude API（claude-sonnet-4-20250514）
+- LINE Messaging API（Webhook）
+- Zod
+
+### インフラ
+- Supabase（PostgreSQL + Auth + Storage）
+- Vercel（client）+ Railway or Render（server）
+
+## 3. DB設計（Supabase / PostgreSQL）
+
+### テーブル一覧
+1. owners — オーナー（サービス利用者）
+2. customers — エンド顧客（LINEユーザー）
+3. customer_needs — AIカルテ（ヒアリング結果）
+4. chat_messages — 会話ログ
+5. bookings — 予約
+6. action_logs — 行動履歴
+7. ai_configs — AIチャット設定
+
+### owners
+- id, auth_id, name, email, business_name, business_type
+- line_channel_id, line_channel_secret, line_access_token
+- booking_url, booking_system, plan
+- created_at, updated_at
+
+### customers
+- id, owner_id, line_user_id, display_name, name, avatar_url
+- interest_level: hot/warm/cold/unknown
+- tags, memo, first_contact_at, last_contact_at
+- UNIQUE(owner_id, line_user_id)
+
+### customer_needs
+- id, customer_id, category(problem/need/goal/situation)
+- content, confidence(0.0-1.0), source_message_id
+
+### chat_messages
+- id, customer_id, owner_id, role(user/assistant/system)
+- content, message_type, line_message_id
+- ai_action(greeting/hearing/proposal/closing/booking_link)
+- metadata(JSONB)
+
+### bookings
+- id, customer_id, owner_id
+- status(pending/confirmed/completed/cancelled/no_show)
+- booking_url, scheduled_at, menu, price, notes
+
+### action_logs
+- id, customer_id, owner_id
+- action_type(link_click/booking_page_visit/booking_complete/follow/unfollow)
+- metadata(JSONB)
+
+### ai_configs
+- id, owner_id, system_prompt, greeting_message
+- business_description, menu_items(JSONB)
+- tone(friendly/professional/casual)
+- closing_style(soft/direct)
+- auto_booking_link, follow_up_hours
+
+### RLS
+全テーブルにRLS有効。owner_idベースでauth.uid()と照合。
+
+## 4. API設計
+
+### ベースURL: /api/v1
+
+### LINE Webhook
+- POST /api/v1/webhook/line
+
+### 顧客
+- GET /api/v1/customers（一覧）
+- GET /api/v1/customers/:id（詳細+カルテ）
+- PATCH /api/v1/customers/:id（更新）
+- GET /api/v1/customers/:id/messages（会話ログ）
+- GET /api/v1/customers/:id/needs（ヒアリング結果）
+
+### 予約
+- GET /api/v1/bookings
+- PATCH /api/v1/bookings/:id
+
+### ダッシュボード
+- GET /api/v1/dashboard/summary
+- GET /api/v1/dashboard/revenue
+- GET /api/v1/dashboard/interest
+
+### AI設定
+- GET /api/v1/ai-config
+- PUT /api/v1/ai-config
+
+### 認証
+- POST /api/v1/auth/signup
+- POST /api/v1/auth/login
+- GET /api/v1/auth/me
+
+## 5. デザインルール
+
+### カラーパレット
+- mint: #7ECEC1 / light: #B5E4DC / pale: #E4F5F1
+- pink: #D4A0A0 / light: #EACECE / pale: #F7ECEC
+- beige: #F5EDE3 / dark: #E8DDD0
+- white: #FEFDFB
+- text: #4A4543 / soft: #6B6563 / light: #8A8280
 
 ### UIルール
-- ボタン: min-height 52px、角丸12px、タップで軽く沈むアニメーション（0.95 scale）
-- カード: 白背景、角丸16px、やわらかいシャドウ
-- フォント: 本文16-18px、見出し20-24px
-- 画面下部タブバー: 🎨クイズ / 📖コレクション / ⚙️設定
-  - アイコン＋短いラベル、選択中はゴールドにハイライト
-- 正解フィードバック: ボタンが緑 + 画面にうっすら緑のフラッシュ + ✨パーティクル(CSS)
-- 不正解フィードバック: ボタンが赤 + 軽いシェイク + 正解ボタンが光る（「おしい！」の雰囲気）
-- 画面遷移: フェード（0.3s ease）
-- スマホファースト、タブレットでも崩れない
+- 角丸: rounded-2xl（カード）/ rounded-full（ボタン）
+- 余白多め、柔らかい影（shadow-sm/md）
+- フォント: 見出し Zen Maru Gothic / 本文 Noto Sans JP
+- パステルグラデーション背景。黒ベース禁止
 
-### 画面ID（HTML）
-- `#screen-home` - クイズ開始画面（ジャンル・難易度選択）
-- `#screen-quiz` - クイズ出題画面
-- `#screen-result` - クイズ結果画面
-- `#screen-collection` - コレクション（図鑑）画面
-- `#screen-detail-modal` - 作品詳細モーダル
-- `#screen-settings` - 設定画面
-- `#tab-bar` - 画面下部固定タブバー
+### NG
+- 黒ベース、ネオン、硬いUI、押し売りコピー
 
-### クイズ開始画面
-- ジャンル選択: チップ型（横スクロール、タップでON/OFF、選択中は色変化）
-- 難易度: ★★★の3段階カード型
-- スタートボタン: 大きなゴールドボタン、中央配置
+### コピーガイドライン
+- 効率化❌ → 少し楽になる⭕
+- 爆速❌ → そっと⭕
+- 自動化ツール❌ → あなたの代わりに⭕
 
-### クイズ画面レイアウト
-- 上部60%: 絵画を大きく表示（アスペクト比保持、暗い背景）
-- 下部40%: 選択肢カード（白背景、角丸、シャドウ）
-- 問題数・正解数の進捗バー（細いゴールドのライン）
+## 6. 設計思想
 
-### コレクション画面
-- 2列グリッド（サムネイル＋作品名）
-- 未取得: モノクロ＋鍵アイコンオーバーレイ
-- 取得済み: カラー表示
-- タップで詳細モーダル
-- 上部にジャンルフィルターチップ（横スクロール）
-- 進捗バー「32/100作品」
+### オーナーの仕事は2つだけ
+Before: 認知→LINE返信→ヒアリング→提案→予約調整→カルテ→フォロー→対面（全部ひとり）
+After: 認知（オーナー）→ LaiF が全自動 → 対面（オーナー）
 
-### 結果画面
-- 大きなスコア表示
-- メダル: 90%以上🏆 / 70%以上🥈 / 50%以上🥉
-- 正解作品のサムネグリッド
-- 紙吹雪CSS（90%以上の時）
+### AIチャットは「売るAI」
+ただ返答する❌ → 予約したい状態をつくる⭕
 
-### 詳細モーダル
-- 作品画像（大）
-- 作品名 / 作者 / 制作年 / 所蔵美術館
-- trivia（豆知識）を吹き出し風デザインで表示
-- 「もっと知りたい → Wikipedia」リンク
+### AIの応答フェーズ
+1. 挨拶（greeting）
+2. ヒアリング（hearing）
+3. 提案（proposal）
+4. クロージング（closing）
+5. 予約リンク（booking_link）
 
-## データ形式（paintings.json）
-```json
-{
-  "id": 1,
-  "title_ja": "モナ・リザ",
-  "title_en": "Mona Lisa",
-  "artist_ja": "レオナルド・ダ・ヴィンチ",
-  "artist_en": "Leonardo da Vinci",
-  "year": "1503-1519",
-  "genre": "肖像画",
-  "museum": "ルーヴル美術館",
-  "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Mona_Lisa.jpg/600px-Mona_Lisa.jpg",
-  "image_thumb": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Mona_Lisa.jpg/300px-Mona_Lisa.jpg",
-  "wiki_filename": "Mona_Lisa.jpg",
-  "difficulty": 1,
-  "trivia": "実はこの絵、ナポレオンが自分の寝室にかざっていたことがある。描かれた女性が誰なのか、500年たった今でもナゾが残っている。"
-}
-```
+### コピー体系
+- タグライン: AIで、愛のある時間を取り戻す
+- コアメッセージ: あなたは、目の前のお客さまだけに集中してください。
+- サブコピー: LINE返信も、予約も、営業も。ぜんぶLaiFが引き受けます。
 
-## triviaの書き方ルール
-- 小5〜6年生が読んで「へぇ！」「すごい！」と思う内容
-- 1エントリ2〜3文、80文字前後
-- 難しい専門用語は使わない（「遠近法」→OK、「スフマート技法」→NG）
-- 「実は〜」「じつは〜」「知ってた？」のように興味を引く書き出し
-- 作品の裏話、意外なエピソード、数字で驚くネタを優先
-
-## genre一覧
-肖像画 / 風景画 / 宗教画 / 歴史画 / 静物画 / 風俗画 / 浮世絵 / 抽象画 / 神話画
-
-## difficulty
-- 1: 有名（モナ・リザ等）→ かんたんモードで出題、選択肢3つ
-- 2: やや通向け → ふつうモードで出題、選択肢4つ
-- 3: 通向け → むずかしいモードで出題、選択肢4つ
-
-## クイズモード
-1. 作品名当て: 絵を見て作品名を選ぶ
-2. 作者当て: 絵を見て作者を選ぶ
-3. ジャンル当て: 絵を見てジャンルを選ぶ
-
-## 選択肢生成ルール
-- 正解1つ + ダミー2〜3つ
-- ダミーは同ジャンル or 同時代の作品から優先選出（紛らわしくする）
-- 同じ選択肢が重複しないこと
-
-## コレクション（図鑑）ルール
-- 1つの作品で3モード（作品名・作者・ジャンル）全正解 → コレクション追加
-- コレクション済み作品は図鑑でカラー表示
-- 未取得作品はモノクロ＋鍵アイコン
-
-## 既存機能（維持すること）
-- ALTコイン連携（TRAILポータル）
-- TrailSDK連携（存在する場合）
-- LocalStorageのコレクションデータ（形式変更時はマイグレーション処理）
-
-## 連続正解演出
-- 3連続: 「3連続正解！🔥」
-- 5連続: 「5連続！すごい！🔥🔥」
-- 10連続: 「10連続！天才！🔥🔥🔥」
-
-## チュートリアル（初回のみ）
-3枚のスライド:
-1. 「クイズに答えよう」
-2. 「コレクションを集めよう」
-3. 「目指せ全作品制覇！」
-
-## 画像サイズ
-- クイズ表示用: 600px幅（image）
-- コレクション一覧用: 300px幅（image_thumb）
-- Wikimedia CommonsのサムネイルURL形式を使用
+### 最終ビジョン
+忙しい毎日を、少しやさしくするAI
